@@ -1,0 +1,1567 @@
+---
+header-includes: 
+  \usepackage[spanish, es-tabla]{babel}
+  \usepackage[bottom]{footmisc}
+  \usepackage{float}
+  \usepackage{framed}
+title: 'Introducción a la Ciencia de Datos'
+subtitle: 'Trabajo teórico-práctico'
+author: 'Antonio Manjavacas Lucas'
+date: '10/12/2020'
+output: 
+  bookdown::pdf_document2:
+      fig_caption: true
+      number_sections: true
+      toc: true
+      toc_depth: 3
+---
+
+\pagenumbering{gobble} 
+\pagenumbering{arabic} 
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(message = FALSE)
+
+Sys.setlocale(locale='es_ES.UTF-8')
+Sys.setenv(LANGUAGE='es')
+
+set.seed(42)
+
+```
+
+```{r include=FALSE}
+
+library(knitr)
+library(kableExtra)
+
+library(readr)
+library(tidyverse)
+library(ggplot2)
+library(moments)
+library(dlookr)
+library(car)
+library(corrplot)
+library(GGally)
+library(lubridate)
+library(caret)
+library(gridExtra)
+library(kknn)
+library(reshape2)
+
+```
+
+# Análisis exploratorio de los datos {#eda}
+
+En esta primera sección del trabajo realizaremos el análisis exploratorio de los datos a emplear en los problemas de regresión y clasificación propuestos.
+
+## Dataset *wankara*
+
+Comencemos estudiando el dataset sobre el que aplicaremos regresión: *wankara*. Este conjunto de datos contiene la información meteorológica de Ankara (Turquía) desde el 01/01/1994 hasta el 28/05/1998. A partir de una serie de atributos meteorológicos, el objetivo será predecir la temperatura media alcanzada en un día.
+
+### Estructura y variables
+
+Una vez cargado el conjunto de datos, se lleva a cabo una exploración preliminar de los mismos:
+
+* Contamos con **1609 filas** (observaciones) y **10 columnas** (9 atributos y 1 variable a predecir). La Tabla \ref{tab:tab1} muestra un pequeño subconjunto de los datos con los que trabajaremos.
+
+```{r tab1, include=TRUE, echo=FALSE}
+
+wankara <- read.csv('./data/wankara/wankara.dat', comment.char = '@', header = F)
+
+colnames(wankara) <- c(
+  'Max_temperature',
+  'Min_temperature',
+  'Dewpoint',
+  'Precipitation',
+  'Sea_level_pressure',
+  'Standard_pressure',
+  'Visibility',
+  'Wind_speed',
+  'Max_wind_speed',
+  'Mean_temperature'
+)
+
+kbl(wankara[1:10,], booktabs = T, caption='Primeras filas del dataset wankara') %>%
+  kable_styling(latex_options = c('scale_down', 'striped'), font_size=8)
+
+```
+
+```{r include=FALSE}
+
+dim(wankara)
+
+```
+
+* Además, si analizamos las datos, observamos que todas las columnas albergan datos de tipo numérico y que no existe ningún *missing value* (*NA*) ni registro duplicado.
+
+```{r include=FALSE}
+
+str(wankara)
+colSums(is.na(wankara))
+wankara[duplicated(wankara),]
+
+```
+
+* Finalmente, no existen variables compuestas ni redundantes y, en general, los datos se interpretan correctamente.
+
+A continuación se procede a estudiar las variables del dataset, de las cuales se supone la siguiente interpretación[^footnote1]:
+
+* *Max_temperature*: temperatura máxima alcanzada en el día (se asume en ºF).
+* *Min_temperature*: temperatura mínima alcanzada en el día (se asume en ºF).
+* *Dewpoint*: punto de rocío. Se trata de la temperatura a la cual una masa de aire debe enfriarse para provocar condensación (se asume en ºF).
+* *Precipitation*: cantidad de precipitaciones. Dado el rango de valores, parece estar medida en pulgadas (in).
+* *Sea_level_pressure*: presión atmosférica a nivel del mar. Del rango de valores se asume que está medida en pulgadas de mercurio (inHg), siendo 29,92 la presión normal a nivel del mar. En general, suele encontrarse entre 29 y 31, como ocurre en nuestro conjunto de datos.
+* *Standard_pressure*: presión atmosférica en la superficie. Al igual que en el caso anterior, se mide en inHg.
+* *Visibility*: nivel de visibilidad. Normalmente se mide en metros (m) e indica la distancia a la cual un objeto o luz puede ser claramente identificado.
+* *Wind_speed*: velocidad de viento. Se asume en millas por hora (MPH).
+* *Max_wind_speed*: velocidad máxima de viento (MPH).
+* *Mean_temperature*: temperatura media alcanzada en el día (se asume en ºF). Es la variable a predecir.
+
+[^footnote1]: Para esta interpretación de los datos se ha tomado como principal referencia la fuente: <https://en.wikipedia.org/wiki/Surface_weather_observation>.
+
+A partir de estas variables, son varias las **hipótesis** preliminares que podemos plantear. Por ejemplo:
+
+* ¿Los días en los que se registran mayores temperaturas la visiblidad es mayor? Esto podría deberse a una mayor incidencia de la luz solar en la superficie.
+* ¿En los días con más precipitaciones cuál tiende a ser la temperatura media? ¿Las tormentas son más comunes con altas o bajas temperaturas?
+* ¿Cómo afecta la presión a la temperatura media?
+* ¿Y el viento?
+
+Planteadas estas cuestiones trataremos de darles respuesta más adelante.
+
+```{r include=FALSE}
+
+# Informacion estadistica
+summary(wankara)
+apply(wankara, 2, quantile)
+apply(wankara, 2, IQR)
+
+```
+
+### Distribución de los datos
+
+Veamos ahora cómo se distribuyen los datos. Primero, observemos los boxplots e histogramas de las Figuras \ref{fig:fig1} y \ref{fig:fig2}, respectivamente. De los boxplots detectamos una mayor cantidad de valores anómalos en las variables $Precipitation$, $Visibility$, así como $Wind\_speed$ y $Max\_wind\_speed$. Es comprensible que se dé esta situación, ya que se trata de variables que pueden tomar valores extremos en situaciones muy concretas. Podemos argumentar que, aunque no todos los días llueve en grandes cantidades, o no todos los días la velocidad del viento es muy alta, al ser algo que puede ocurrir si se dan las condiciones necesarias, estos no son *outliers* que realmente deseemos eliminar (no son errores de medición, sino casos atípicos).
+
+```{r fig1, include=TRUE, echo=FALSE, fig.dim=c(7,5), fig.cap="Distribución de los datos: boxplots"}
+
+wankara %>% gather(variable, value) %>%
+  ggplot(aes(factor(variable), value)) + geom_boxplot(fill = 'steelblue') +
+  facet_wrap( ~ variable, scale = 'free') + theme_minimal() +
+  labs(
+    # title = 'Distribución de los datos',
+    # subtitle = 'Boxplots',
+    x = 'Variables',
+    y = 'N'
+  )
+
+```
+
+```{r fig2, fig.width=10, include=TRUE, echo=FALSE, fig.cap="Distribución de los datos: histogramas"}
+
+# Numero de bins elegido siguiendo la "Regla de Sturges": n_bins = 1 + log2(M)
+# https://es.wikipedia.org/wiki/Regla_de_Sturges
+
+n_bins = 10
+
+wankara %>% gather(variable, value) %>%
+  ggplot(aes(x = value)) +
+  geom_histogram(bins = n_bins, fill = 'steelblue', color = 'black') +
+  facet_wrap(~ variable, scale = 'free') + theme_minimal() +
+  labs(
+    # title = 'Distribución de los datos',
+    # subtitle = 'Histogramas',
+    x = 'Valor',
+    y = 'N'
+  ) + geom_freqpoly(bins = n_bins, col='red')
+
+```
+
+Tras observar gráficamente la distribución de los datos, calculamos su asimetría (*skewness*), obteniendo los siguientes resultados (ver Tabla \ref{tab:tab2}):
+
+```{r tab2, include=TRUE, echo=FALSE}
+
+skewness <- wankara %>% skewness()
+
+kbl(as.data.frame(skewness), booktabs = T, caption='Asimetría de las variables') %>%
+  kable_styling(latex_options = 'striped', font_size=10)
+
+```
+
+* *Skewness* negativa (distribución desplazada a la derecha): $Dewpoint$, $Visibility$.
+* *Skewness* positiva (distribución desplazada a la izquierda): $Precipitation$, $Sea\_level\_pressure$, $Wind\_speed$, $Max\_wind\_speed$.
+* *Skewness* cercana a cero (distribución centrada): $Max\_temperature$, $Min\_temperature$, $Mean\_temperature$, $Standard\_pressure$.
+
+También podemos conocer la curtosis (*kurtosis*) de las distribuciones (ver Tabla \ref{tab:tab3}). Mayores valores de curtosis implican curvas más pronunciadas, mientras que valores bajos implican distribuciones más achatadas.
+
+```{r tab3, include=TRUE, echo=FALSE}
+
+kurtosis <- wankara %>% kurtosis()
+
+kbl(as.data.frame(kurtosis), booktabs = T, caption='Curtosis de las variables') %>%
+  kable_styling(latex_options = 'striped', font_size=10)
+
+```
+
+En general, las variables con curtosis y asimetría más cercanas a 0 presentarán una mayor normalidad. De forma preliminar, los resultados obtenidos en esta sección nos revelan que es bastante improbable que alguna de nuestras variables siga una distribución normal. Aun así, trataremos de corroborar esta afirmación aplicando el test estadístico correspondiente.
+
+### Normalidad
+
+Evaluaremos la normalidad de las variables aplicando el test de *Shapiro-Wilk*, obteniendo los resultados que se muestran en la Tabla \ref{tab:tab4}. Como podemos observar, para ningún p-value se cumple: $p$-$value > 0.05$, lo cual implica que **no podemos asumir la normalidad de ninguna de las variables**. Realmente este no es un problema a la hora de emplear regresión, ya que no requiere que los datos sigan una distribución normal para ser aplicada. Igualmente, es una información útil a tener en cuenta por si posteriormente fuese necesario realizar algún tipo de test estadístico sobre los datos.
+
+```{r tab4, include=TRUE, echo=FALSE}
+
+normality <- wankara %>% normality()
+
+kbl(as.data.frame(normality), digits=30, booktabs = T, caption='Normalidad de las variables') %>%
+  kable_styling(latex_options = 'striped', font_size=10)
+
+```
+
+```{r include=FALSE, echo=FALSE}
+
+wankara %>% normality() %>% filter(p_value > .05)
+
+```
+
+* Reincidiendo en la idea de la no normalidad de nuestros datos, y viendo los resultados del test estadístico aplicado, la variable que tal vez presenta una mayor cercanía a una distribución normal es $Standard\_pressure$. Aun así, como ya hemos adelantado, no podemos asumir su normalidad, tal y como se muestra en el grafíco Q-Q de la Figura \ref{fig:fig3}.
+
+```{r include=FALSE, echo=FALSE}
+
+shapiro.test(wankara$Standard_pressure)
+
+```
+
+```{r fig3, include=TRUE, echo=FALSE, fig.dim=c(5,5), fig.cap="Gráfico Q-Q de la variable Standard_pressure"}
+
+qqPlot(
+  wankara$Standard_pressure,
+  xlab = 'Cuartiles norm.',
+  ylab = 'Standard pressure',
+  # main = 'QQplot: Standard Pressure'
+  id = FALSE
+)
+
+```
+
+Algo que sí resulta de especial interés a la hora de aplicar regresión (especialmente si vamos a emplear modelos con interacción entre variables o *k-NN*) es la **estandarización** de nuestros datos (*Z-score*). Tras aplicarla, obtenemos las distribuciones que se muestran en la Figura \ref{fig:fig4}, que son similares a las ya vistas pero con $\mu = 0$ y $\sigma = 1$.
+
+```{r fig4, fig.width=10, include=TRUE, echo=FALSE, fig.cap="Histogramas de las variables estandarizadas"}
+
+scaled_wankara <- as.data.frame(scale(wankara))
+
+scaled_wankara %>% gather(variable, value) %>%
+  ggplot(aes(x = value)) +
+  geom_histogram(bins = n_bins, fill = 'skyblue', color = 'black') +
+  facet_wrap(~ variable, scale = 'free') + theme_minimal() +
+  labs(
+    # title = 'Distribución de los datos estandarizados',
+    # subtitle = 'Histogramas',
+    x = 'Valor',
+    y = 'N'
+  ) + geom_freqpoly(bins = n_bins, col='red') 
+
+```
+
+### Correlación
+
+Un paso previo esencial antes de aplicar regresión es estudiar la correlación entre las variables de las que disponemos. Aquellas variables más correladas con la variable objetivo serán mejores candidatas a formar parte de nuestro modelo. Estas correlaciones se muestran en detalle en las Figuras \ref{fig:fig5} y \ref{fig:fig6}.
+
+```{r fig5, include=TRUE, echo=FALSE, fig.cap="Correlación entre las variables del dataset"}
+
+wankara %>% cor() %>% corrplot(
+  method = 'color',
+  addCoef.col = 'black',
+  tl.col = 'black',
+  number.cex = .7
+)
+
+```
+
+```{r fig6, include=TRUE, echo=FALSE, fig.dim=c(20,20), fig.cap="Relaciones entre las variables del dataset"}
+
+wankara %>% 
+  ggpairs(progress = FALSE, title='Correlaciones entre variables') + theme_bw()
+
+```
+
+Las variables que presentan una mayor correlación con la temperatura media son: las temperaturas máxima y mínima, el punto de rocío, la presión atmosférica a nivel del mar y la visibilidad. Por otro lado, el viento, las precipitaciones y la presión estándar parecen estar menos relacionadas con nuestra variable objetivo.
+
+* Si atendemos a estas relaciones, tiene sentido que las variables $Max\_temperature$ y $Min\_temperature$ estén positivamente relacionadas con $Mean\_temperature$, ya que la temperatura media siempre se encuentra entre ambas. Debemos tener en cuenta que  variables como el viento o las precipitaciones pueden tener cierta influencia sobre la temperatura media, haciéndola variar ligeramente, por lo que la media que podemos obtener a partir de las temperaturas máxima y mínima no será exactamente igual, pero sí un valor muy aproximado a la temperatura media real.
+* El punto de rocío ($Dewpoint$) también presenta una severa correlación positiva con la temperatura media, de una forma similar a las temperaturas máxima y mínima.
+* Por otro lado, $Sea\_level\_pressure$ (y $Standard\_pressure$ en menor medida) están relacionadas negativamente con la temperatura media. Nos podría interesar estudiar esta correlación en detalle.
+* La visibilidad, o $Visibility$, presenta una correlación positiva con la temperatura media. Como ya hemos hipotetizado, los días más calidos podrían ser aquellos con una mayor incidencia de luz solar en la superficie, lo que supondría este crecimiento de las temperaturas.
+* Finalmente, resulta llamativo el cómo la variable $Precipitation$ presenta una gran independiencia del resto y, en general, parece aportarnos poca información.
+
+De esta forma, las variables: $Max\_temperature$, $Min\_temperature$, $Dewpoint$, y posiblemente $Sea\_level\_pressure$ y $Visibility$ podrían ser las más apropiadas a la hora de estimar la temperatura media ($Mean\_temperature$). No obstante, de cara a simplificar el modelo de regresión múltiple, de entre las variables $Max\_temperature$, $Min\_temperature$ y $Dewpoint$ deberíamos optar por mantener únicamente una de ellas, ya que están altamente correladas entre sí y añadirían redundancia.
+
+La influencia de las diferentes variables sobre el modelo será algo con lo que se experimentará en el apartado de regresión, el cuál será abordado sobre el conocimiento extraído de este análisis previo.
+
+### Hipótesis {#hip}
+
+Tratemos ahora de dar respuesta a las preguntas planteadas al principio de este análisis:
+
+\begin{framed}
+¿Los días en los que se registran mayores temperaturas la visiblidad es mayor? Esto podría deberse a una mayor incidencia de la luz solar en la superficie.
+\end{framed}
+
+Si observamos la Figura \ref{fig:fig7}, observamos una alta concentración de días con una visibilidad de entre 7 y 9. Si atendemos a la *Escala Internacional de Visibilidad en el Aire*[^footnote3] (que se intuye es la referencia tomada en el dataset para medir la visibilidad), dichos niveles se corresponden con atmósfera diáfana con niveles de visibilidad *buena* (7), *muy buena* (8) y *excelente* (9), respectivamente. De esta información podemos extraer que la mayoría de días en Ankara la visibilidad es buena y que los días cálidos tienden a presentar una alta visibilidad por lo general, respondiendo así a la pregunta planteada.
+
+Sin embargo, podemos extraer aun más conclusiones: si atendemos a los días con baja visibilidad (niebla), normalmente se trata de días con bajas temperaturas, como cabría esperar. No obstante, no todos los días con bajas temperaturas son días con niebla. De hecho, la mayor cantidad de días con bajas temperaturas son días con una alta visibilidad. 
+
+Es por esto por lo que podemos concluir en que mientras **una baja visibilidad tiende a asociarse a días fríos**, **en los días despejados la visibilidad es un mal predictor de la temperatura**. No obstante, y a modo de conclusión, de la Figura \ref{fig:fig7} podemos observar que la distribución de los puntos podría corresponderse con una función cuadrática o incluso exponencial, algo que consideraremos a la hora de construir nuestro modelo de regresión.
+
+[^footnote3]: Véase <https://www.tiempo.com/ram/1041/meteorologa-viila-visibilidad-y-los-factores-meteorolgicos-que-influyen-en-ella/> y <https://www.semanticscholar.org/paper/Analysis-of-the-atmospheric-visibility-Restoration-Deshpande/662237bb893d2b50a728751880f20cf1f8225aef>
+
+```{r fig7, include=TRUE, echo=FALSE, fig.dim=c(4,4), fig.cap="Relación entre temperatura media y visibilidad"}
+
+wankara %>% ggplot(aes(x=Visibility, y=Mean_temperature)) + 
+  geom_point(col='brown',alpha=.6) + theme_minimal() + 
+  labs(x='Nivel de visibilidad', y='Temperatura media (ºF)')
+
+```
+
+
+\begin{framed}
+¿En los días con más precipitaciones cuál tiende a ser la temperatura media? ¿Las tormentas son más comunes con altas o bajas temperaturas?
+\end{framed}
+
+Lo primero que podemos observar en la relación entre la temperatura media y las precipitaciones (ver Figura \ref{fig:fig8}) es la presencia de dos posibles *outliers*, tal y como se muestran en la Figura \ref{fig:fig9}. Podemos ver en detalle estas observaciones en la Tabla \ref{tab:tab5}, donde se observa que realmente no son días con valores anómalos en sus predictores. Ya que no disponemos de información suficiente como para catalogarlos como errores de medición y pudiendo esa cantidad atípica de precipitaciones deberse a otros factores no contemplados en el dataset (por ejemplo, concentración de nubes), se ha considerado directamente no tenerlos en cuenta.
+
+```{r tab5, include=TRUE, echo=FALSE}
+
+anom <- wankara %>% filter(Precipitation > 2.0)
+
+kbl(anom, booktabs = T, caption='Días con precipitaciones anómalas') %>%
+  kable_styling(latex_options = c('scale_down', 'striped'), font_size=10)
+
+```
+
+
+```{r fig8, include=TRUE, echo=FALSE, fig.dim=c(4,4), fig.cap="Relación entre la temperatura media y las precipitaciones"}
+
+wankara %>% ggplot(aes(x=Precipitation, y=Mean_temperature)) + 
+  geom_point(col='navy',alpha=.6) + theme_minimal() + 
+  labs(x='Precipitaciones (in)', y='Temperatura media (ºF)')
+
+```
+
+
+```{r fig9, include=TRUE, echo=FALSE, fig.dim=c(4,4), fig.cap="Valores anómalos en la relación temperatura media - precipitaciones"}
+
+indexes <- which(wankara$Precipitation > 2.0)
+
+wankara_precip <- wankara[-indexes,]
+
+wankara %>% ggplot(aes(x=Precipitation, y=Mean_temperature)) + 
+  geom_point(col='navy',alpha=.6, size=5) + theme_minimal() + 
+  labs(x='Precipitaciones (in)', y='Temperatura media (ºF)') +
+  scale_x_continuous(breaks = round(seq(0, max(wankara$Precipitation), by = 0.5), 1)) +
+  xlim(3.0, 4.0)
+
+```
+
+Una vez aclarado el tratamiento de las observaciones atípicas, encontramos una distribución de las precipitaciones más parecida a una variable categórica que a una continua (ver Figura \ref{fig:fig10}). Esto parece deberse a que en la medición de las precipitaciones no se emplean valores continuos sino discretos dentro, posiblemente, de la escala de un pluviómetro.
+
+```{r fig10, include=TRUE, echo=FALSE, fig.dim=c(4,4), fig.cap="Relación entre temperatura media y las precipitaciones (sin valores anómalos)"}
+
+wankara_precip %>% ggplot(aes(x=Precipitation, y=Mean_temperature)) + 
+  geom_point(col='navy',alpha=.6) + theme_minimal() + 
+  labs(x='Precipitaciones (in)', y='Temperatura media (ºF)') +
+  scale_x_continuous(breaks = round(seq(0, max(wankara$Precipitation), by = 0.5), 1))
+
+```
+
+Sin hacer un estudio más profundo de la variable y ante las limitaciones de cómo se encuentra medida en nuestro conjunto de datos, **no podemos confirmar que las precipitaciones y la temperatura media estén estrechamente relacionadas**. Esto la convierte en una variable descartable de nuestro modelo.
+
+\begin{framed}
+¿Cómo afecta la presión a la temperatura media?
+\end{framed}
+
+A primera vista, tanto en el caso de la presión estándar (Figura \ref{fig:fig11}) como de la presión a nivel del mar (Figura \ref{fig:fig12}) observamos cierta correlación negativa, ya descubierta en secciones previas.
+
+```{r fig11, include=TRUE, echo=FALSE, fig.dim=c(4,4), fig.cap="Relación entre temperatura media y la presión estándar"}
+
+wankara %>% ggplot(aes(x=Standard_pressure, y=Mean_temperature)) + 
+  geom_point(col='darkcyan',alpha=.6) + theme_minimal() + 
+  labs(x='Presión estándar (inHg)', y='Temperatura media (ºF)')
+
+```
+
+
+```{r fig12, include=TRUE, echo=FALSE, fig.dim=c(4,4), fig.cap="Relación entre temperatura media y la presión a nivel del mar"}
+
+wankara %>% ggplot(aes(x=Sea_level_pressure, y=Mean_temperature)) + 
+  geom_point(col='darkcyan',alpha=.6) + theme_minimal() + 
+  labs(x='Presión a nivel del mar (inHg)', y='Temperatura media (ºF)')
+
+```
+
+Especialmente en el caso a nivel del mar, observamos que a menor presión mayor es la temperatura media; esto podría deberse al siguiente fenómeno[^footnote4]:
+
+* A bajas temperaturas, el aire se contrae, aumentando su densidad y, por lo tanto, descendiendo, de tal forma que aumenta la presión en la superficie.
+* Si, por el contrario, las temperaturas son altas, el aire asciende y la presión disminuye.
+
+Independientemente de la interpretación meteorológica de esta relación, observamos que **la presión muestra una correlación significativa con la temperatura media**, por lo que ambas variables serían buenas candidatas a formar parte de nuestro modelo. No obstante, de cara a simplificar nuestro modelo de regresión múltiple y evitar variables que redundan en la misma información, seguramente $Sea\_level\_pressure$ sería la variable que mejor representa la relación entre presión y temperatura.
+
+[^footnote4]: https://es.wikipedia.org/wiki/Presi%C3%B3n_atmosf%C3%A9rica
+
+\begin{framed}
+¿Cómo afecta el viento a la temperatura media?
+\end{framed}
+
+Finalmente, la relación entre viento y temperatura media mostrada en la Figura \ref{fig:fig13} es poco esclarecedora. Tal vez pueda entreverse una velocidad del viento ínfimamente mayor para temperaturas altas, pero definitivamente no es un variable que vaya a resultar de gran utilidad en nuestro modelo. Afirmaremos, pues, que **a partir de los datos proporcionados, no existe relación directa entre la temperatura media y la velocidad del viento**.
+
+```{r fig13, include=TRUE, echo=FALSE, fig.dim=c(4,4), fig.cap="Relación entre temperatura media y la velocidad del viento"}
+
+wankara %>% ggplot(aes(x=Wind_speed, y=Mean_temperature)) + 
+  geom_point(col='indianred',alpha=.6) + theme_minimal() + 
+  labs(x='Velocidad del viento (MPH)', y='Temperatura media (ºF)')
+
+```
+
+Estudiado el conjunto de datos destinados a regresión, pasemos ahora a abordar el dataset empleado en el problema de clasificación.
+
+## Dataset *newthyroid*
+
+El dataset empleado para nuestro problema de clasificación es *newthyroid*. Este conjunto de datos es una de los múltiples conjuntos de datos sobre Tiroides disponibles en el UC Irvine Machine Learning Repository (UCI)[^footnote5]. Nuestro objetivo será detectar si un determinado paciente es normal (1) o si padece hipertiroidismo (2) o hipotiroidismo (3). Cada tipo de paciente es una clase a identificar (atributo *Class*). En la Tabla \ref{tab:tab6} se muestran las primeras filas del dataset.
+
+[^footnote5]: https://archive.ics.uci.edu/ml/index.php
+
+```{r tab6, include=TRUE, echo=FALSE}
+
+newthyroid <- read.csv('./data/newthyroid/newthyroid.dat', comment.char='@', header = FALSE)
+
+colnames(newthyroid) <- c('T3resin', 'Thyroxin', 'Triiodothyronine', 
+                          'Thyroidstimulating', 'TSH_value', 'Class')  
+
+kbl(newthyroid[1:10,], booktabs = T, caption='Primeras filas del dataset newthyroid') %>%
+  kable_styling(latex_options = c('scale_down', 'striped'), font_size=11)
+
+```
+
+### Estructura y variables
+
+Comencemos viendo la estructura del conjunto de datos e información relevante sobre el mismo:
+
+* Contamos con **215 filas** (observaciones) y **6 columnas** (5 atributos y 1 clase a predecir).
+* Con respecto al tipo de datos, la columna $T3resin$ está compuesta por valores numéricos enteros, mientras que $Thyroxin$, $Triiodothyronine$, $Thyroidstimulating$ y $TSH\_value$ son variables numéricas con decimales. Finalmente, el atributo $Class$ (clase a predecir) ha sido convertido en un factor (variable categórica), ya que inicialmente fue cargada como un atributo numérico entero.
+* No existen *missing values* (*NAs*) ni registros duplicados.
+* En principio, no contamos con variables compuestas ni redundantes, aunque trataremos de asegurarnos de esto último tratando de conocer a fondo las variables del dataset.
+
+```{r include=FALSE, echo=FALSE}
+
+dim(newthyroid)
+
+str(newthyroid)
+summary(newthyroid)
+
+colSums(is.na(newthyroid))
+newthyroid[duplicated(newthyroid),]
+
+newthyroid$Class <- as.factor(newthyroid$Class)
+
+```
+
+```{r include=FALSE, echo=FALSE}
+
+# Informacion estadistica
+summary(newthyroid)
+
+thyroid_num <- newthyroid[,unlist(lapply(newthyroid, is.numeric)) ]
+
+apply(thyroid_num , 2, quantile)
+apply(thyroid_num , 2, IQR)
+
+```
+
+Las variables con los que trabajaremos son las siguientes[^footnote6]:
+
+* *T3resin*: captación de resina T3 (también llamada “captación T3” o “T3RU”). Es un análisis de sangre realizado como parte de una evaluación de la función tiroidea.
+* *Triiodothyronine*: la triyodotironina (o T3), es una hormona tiroidea. Afecta a casi todos los procesos fisiológicos en el cuerpo, incluyendo crecimiento y desarrollo, metabolismo, temperatura corporal y ritmo cardíaco.
+* *Thyroxin*: tiroxina (o T4). Es otra hormona tiroidea que se mide con el mismo propósito que la T3.
+* *Thyroidstimulating*: la tirotropina, hormona estimulante de la tiroides, hormona tiroestimulante u hormona tirotrópica (abreviada también TSH, del inglés Thyroid-Stimulating Hormone) es una hormona producida por la hipófisis que regula la producción de hormonas tiroideas por la glándula tiroides. 
+* *TSH_value*: **el rango normal de los niveles de TSH es de 0.4 a 4.0**. A priori, se trata de un atributo realmente importante a la hora de diagnosticar la tiroides si nos basamos en conocimiento experto:
+    * Un valor por encima del rango normal generalmente indica que la tiroides está poco activa. **Esto indica *hipotiroidismo***. Cuando la tiroides no produce suficientes hormonas, la glándula pituitaria libera más TSH para intentar estimularla. 
+    * Un valor por debajo del rango normal significa que la tiroides está hiperactiva. **Esto indica *hipertiroidismo***. Cuando la tiroides produce demasiadas hormonas, la glándula pituitaria libera menos TSH. Esto puede corroborarse claramente en nuestro conjunto de datos (lo abordaremos más adelante).
+* *Class*: tipo de paciente: *normal* (1), *hipertiróidico* (2) o *hipotiróidico* (3).
+
+[^footnote6]: Se han tomado como referencia las siguientes fuentes: <https://es.wikipedia.org/wiki/Triyodotironina>, <https://es.wikipedia.org/wiki/Tirotropina>, <https://www.healthline.com/health/tsh#results>
+
+Si bien se trata de un campo de conocimiento muy especializado, a partir de la información recabada de las diferentes fuentes podemos hacernos una idea de las variables que emplearemos para clasificar. Por ejemplo, $TSH\_value$ parece ser un muy buen predictor del tipo de paciente. De hecho, a primera vista podemos ver que el razonamiento sobre la relación entre los niveles de TSH y el hipotiroidismo/hipertiroidismo es acertado y se corresponde con las observaciones del dataset, tal y como se muestra en la Tabla \ref{tab:tab7} y la Figura \ref{fig:figtab7}.
+
+```{r tab7, include=TRUE, echo=FALSE, fig.dim=c(5,5), fig.cap="Niveles de TSH por tipo de paciente"}
+
+levels(newthyroid$Class) <- c('Normal', 'Hipertiroidico', 'Hipotiroidico')
+tsh_by_class <- newthyroid %>% group_by(Class) %>% summarise(`Mean TSH`=mean(TSH_value), `Median TSH`=median(TSH_value))
+
+kbl(tsh_by_class, booktabs = T, caption='Niveles de TSH medios para cada tipo de paciente') %>%
+  kable_styling(latex_options = c('striped'), font_size=10)
+
+```
+
+
+```{r figtab7, include=TRUE, echo=FALSE, fig.dim=c(5,4), fig.cap="Niveles de TSH por clase"}
+
+newthyroid %>% group_by(Class) %>% ggplot() + 
+  geom_boxplot(aes(x=Class, y=TSH_value,fill=Class)) + 
+  coord_cartesian(ylim=c(-3,55)) + theme_minimal()
+
+```
+
+
+Por otro lado, una vez interpretados los datos, podemos plantearnos algunas preguntas iniciales, tales como:
+
+* ¿Hay alguna diferencia entre *T3resin* y *Triiodothyronine*? ¿Ambas son mediciones relacionadas con la hormona T3 o reflejan información diferente?
+* De la misma forma, ¿existen diferencias entre *Thyroidstimulating* y *TSH_value*?
+
+De nuevo, abordaremos estas cuestiones más adelante.
+
+### Balanceo de clases
+
+Si atendemos a la variable $Class$, podemos observar un claro desbalanceo de clases, con un total de **150** observaciones para la *Clase 1* frente a **35** para la *Clase 2* y **30** para la *Clase 3* (ver Figura \ref{fig:fig14}). Debido que el empleo de *oversampling* y/o *undersampling* escapa de los objetivos de la asignatura en la que se enmarca este trabajo, nos conformaremos con realizar una divisón entre train y test que respete las proporciones de cada una de las clases.
+
+```{r fig14, include=TRUE, echo=FALSE, fig.dim=c(5,3), fig.cap="Frecuencia de cada una de las clases"}
+
+freqs <- table(newthyroid$Class)
+as.data.frame(freqs) %>% rename(Clase=Var1, N=Freq) %>% 
+  ggplot(aes(x=Clase, y=N)) + geom_bar(stat='identity', aes(fill=Clase)) +
+  xlab('Clase') + ylab('N') + theme_minimal() +
+  geom_text(aes(label=N), vjust=1.6, color='white', size=4) + 
+  theme(legend.position = 'none')
+
+```
+
+### Distribución de los datos
+
+Estudiemos la distribución de los datos a partir de los boxplots e histogramas de las Figuras \ref{fig:fig15} y \ref{fig:fig16}, respectivamente.
+
+* De los boxplots observamos que las variables $Thyroidstimulating$ y $TSH\_value$ siguen una distribución muy similar, lo cual reafirma la teoría de que representan información similar sobre la hormona TSH, aunque tal vez medida de forma distinta. A su vez, podemos afirmar que las observaciones que superan el tercer cuartil deberán corresponderse con casos de hipotiroidismo.
+
+```{r fig15, include=TRUE, echo=FALSE, fig.dim=c(8,6), fig.cap="Distribución de los datos: boxplots"}
+
+newthyroid %>% gather(variable, value, -Class) %>%
+  ggplot(aes(factor(variable), value)) + geom_boxplot(aes(fill = Class)) +
+  facet_grid(Class ~ variable, scale = 'free') +
+  labs(
+    # title = 'Distribución de los datos',
+    # subtitle = 'Boxplots',
+    x = 'Variables',
+    y = 'N'
+  )
+
+```
+
+* Por otro lado, los histogramas revelan un desplazamiento en la distribución de las variables referentes al TSH hacia la izquierda, algo comprensible ahora que sabemos que el índice de TSH de una persona sin tiroides se encuentra entre 0.4 y 4, siendo casos con TSH superiores sinónimos de hipotiroidismo. Esto también nos revela que la desviación con respecto a la media de los primeros es mayor, como podemos ver en la Tabla \ref{tab:tab8}, en relación con los hipertiróidicos.
+
+```{r tab8, include=TRUE, echo=FALSE, fig.dim=c(5,5)}
+
+sd_tsh <- newthyroid %>% group_by(Class) %>% select(Clase=Class, TSH_value) %>% summarise(`TSH SD`=sd(TSH_value))
+
+kbl(sd_tsh, booktabs = T, caption='Desviación típica de los niveles de TSH por clase') %>%
+  kable_styling(latex_options = c('striped'), font_size=10)
+
+```
+
+```{r fig16, include=TRUE, echo=FALSE, fig.dim=c(5,4), fig.cap="Distribución de los datos: histogramas"}
+
+# Numero de bins elegido siguiendo la "Regla de Sturges": n_bins = 1 + log2(M)
+# https://es.wikipedia.org/wiki/Regla_de_Sturges
+
+n_bins = 9
+
+thyroid_num %>% gather(variable, value) %>%
+  ggplot(aes(x = value)) +
+  geom_histogram(bins = n_bins, fill = 'steelblue', color = 'black') +
+  facet_wrap(~ variable, scale = 'free') + theme_minimal() +
+  labs(
+    # title = 'Distribución de los datos',
+    # subtitle = 'Histogramas',
+    x = 'Valor',
+    y = 'N'
+  ) + geom_freqpoly(bins = n_bins, col='red')
+
+```
+
+Finalmente, los valores de *skewness* y *kurtosis* son los representados en las Tablas \ref{tab:tab9} y \ref{tab:tab10}, complementando la información reflejada en los gráficos. Podemos ver que las variables con menor asimetría son $T3resin$ y $Thyroxin$, así como aquellas que menor curtosis presentan, lo cual las convierte en candidatas a ser consideradas normales.
+
+
+```{r tab9, include=TRUE, echo=FALSE}
+
+skewness <- thyroid_num %>% skewness()
+
+kbl(as.data.frame(skewness), booktabs = T, caption='Asimetría de las variables') %>%
+  kable_styling(latex_options = 'striped', font_size=10)
+
+```
+
+
+```{r tab10, include=TRUE, echo=FALSE}
+
+kurtosis <- thyroid_num %>% kurtosis()
+
+kbl(as.data.frame(kurtosis), booktabs = T, caption='Curtosis de las variables') %>%
+  kable_styling(latex_options = 'striped', font_size=10)
+
+```
+
+Vista la distribución de las variables, estudiemos pues su normalidad.
+
+### Normalidad {#eda-norm}
+
+Tras aplicar el test de *Shapiro-Wilk* para comprobar la normalidad de nuestras variables (ver Tabla \ref{tab:tab11}), observamos que para ningun p-value se cumple $p$-$value > 0.05$, por lo que no podemos asumir la normalidad de ninguna de nuestras variables.
+
+```{r tab11, include=TRUE, echo=FALSE, fig.dim=c(5,5)}
+
+normality <- thyroid_num %>% normality()
+
+kbl(as.data.frame(normality), digits=30, booktabs = T, caption='Normalidad de las variables') %>%
+  kable_styling(latex_options = 'striped', font_size=10)
+
+```
+
+* Con el fin de mejorar la normalidad de nuestros datos, se probó a aplicar las transformaciones de *Box-Cox* y *Yeo-Johnson* en el preprocesamiento de los datos. Los resultados no dieron lugar a cambios significativos con repecto a la normalidad de los datos (ver Tablas \ref{tab:tab12} y \ref{tab:tab13}), por lo que se optó por no mantener estas transformaciones sobre el conjunto de datos original.
+
+```{r tab12, include=TRUE, echo=FALSE, fig.dim=c(5,5)}
+
+box_cox_values <- preProcess(thyroid_num, method = c('BoxCox'))
+thyroid_num_box_cox<-predict(box_cox_values, thyroid_num)
+
+box_cox_normality <- normality(thyroid_num_box_cox)
+
+kbl(as.data.frame(box_cox_normality), digits=30, booktabs = T, caption='Normalidad de las variables tras aplicar Box-Cox') %>%
+  kable_styling(latex_options = 'striped', font_size=10)
+
+```
+
+
+```{r tab13, include=TRUE, echo=FALSE, fig.dim=c(5,5)}
+
+yeo_johnson_values <- preProcess(thyroid_num, method = c('YeoJohnson'))
+thyroid_num_yeo_johnson <-predict(yeo_johnson_values, thyroid_num)
+
+yeo_johnson_normality <- normality(thyroid_num_yeo_johnson)
+
+kbl(as.data.frame(yeo_johnson_normality), digits=30, booktabs = T, caption='Normalidad de las variables tras aplicar Yeo-Johnson') %>%
+  kable_styling(latex_options = 'striped', font_size=10)
+
+```
+
+
+Finalmente, tras observar que ninguna de nuestras variables puede hacerse corresponder con una distribución normal, aplicaremos las operaciones de escalado y normalización de cara a mejorar el desempeño de los algoritmos de clasificación a emplear. Los resultados se reflejan en los histogramas de la Figura \ref{fig:fig17}.
+
+```{r fig17, include=TRUE, echo=FALSE, fig.dim=c(5,4), fig.cap="Histogramas de las variables estandarizadas y normalizadas"}
+
+preprocess_values <- preProcess(thyroid_num, method = c('center', 'scale'))
+thyroid_num_transformed <- predict(preprocess_values, thyroid_num)
+
+thyroid_num_transformed %>% gather(variable, value) %>%
+  ggplot(aes(x = value)) +
+  geom_histogram(bins = n_bins, fill = 'yellowgreen', color = 'black') +
+  facet_wrap(~ variable, scale = 'free') + theme_minimal() +
+  labs(
+    # title = 'Distribución de los datos',
+    # subtitle = 'Histogramas',
+    x = 'Valor',
+    y = 'N'
+  ) + geom_freqpoly(bins = n_bins, col='red')
+
+```
+
+### Correlación {#cor-newthyroid}
+
+Estudiemos ahora la correlación entre variables, ilustrada en las Figuras \ref{fig:fig18} y \ref{fig:fig19}. Se trata de un proceso de especial relevancia en el que trataremos de descartar variables correlacionadas que añadan redundancia a nuestros modelos de clasificación.
+
+```{r fig18, include=TRUE, echo=FALSE, fig.dim=c(4,4), fig.cap="Correlación entre las variables del dataset"}
+
+thyroid_num %>% cor() %>% corrplot(
+  method = 'color',
+  addCoef.col = 'black',
+  tl.col = 'black',
+  number.cex = .7
+)
+
+```
+
+
+```{r fig19, include=TRUE, echo=FALSE, fig.dim=c(20,20), fig.cap="Relaciones entre las variables del dataset"}
+
+newthyroid %>% 
+  ggpairs(progress = FALSE, 
+          title='Correlaciones entre variables', 
+          ggplot2::aes(colour=Class), 
+          lower = list(combo = wrap("facethist", binwidth = 0.5))) + theme_bw()
+
+```
+
+De los resultados obtenidos podemos extraer las siguientes conclusiones, las cuales dan respuesta a las hipótesis planteadas al inicio de esta sección:
+
+* Las variables $Triiodothyronine$ (T3) y $Thyroxin$ (T4) guardan una alta correlación negativa.
+* Las relaciones entre $TSH\_value$ y $Thyroidstimulating$ (TSH), así como entre $T3resin$ y $Triiodothyronine$ (T3), no son tan estrechas como se hipotetizó en un principio, aunque igualmente son significativas y deberán tenerse en cuenta en la parte de clasificación.
+
+### Conclusiones
+
+A partir de la exploración del dataset *newthyroid* y de información médica recabada a partir de diferentes fuentes, observamos que las variables relacionadas con los índices de TSH ($TSH\_value$ y $Thyroidstimulating$) son las más prometedoras a la hora de clasificar a los pacientes, por lo que al menos una de ellas será elegida para llevar a cabo el diagnóstico de tiroides.
+
+Por otro lado, las variables referentes a las hormonas T3 ($Triiodothyronine$) y T4 ($Thyroxin$) son relevantes, aunque en menor medida. Tras observar su correlación, puede que empleando solamente una de ellas la clasificación sea adecuada.
+
+Finalmente, sin conocimiento de un experto, no nos es posible conocer la relevancia de la variable $T3resin$ y en qué se diferencia su medición de la de T3, lo que abre la puerta a experimentar cuál de ambos predictores representa mejor la presencia de la hormona T3 en los pacientes.
+
+# Regresión {#reg}
+
+En esta sección se abordará el conjunto de tareas correspondientes a la parte de **regresión** sobre el dataset *wankara*. Nótese como la única modificación que se ha realizado sobre el dataset en la Sección \ref{eda} ha sido la estandarización de las variables (recomendable para *k-NN* y regresión múltiple), aunque se ha decidido trabajar con el dataset original para evitar inconsistencias con los ficheros 5-fcv proporcionados.
+
+Veamos pues, paso a paso, la solución propuesta para cada uno de los enunciados.
+
+## Regresión lineal
+
+\begin{framed}
+Utilizar el algoritmo de regresión lineal simple sobre cada regresor (variable de entrada) para obtener los modelos correspondientes. Si el $dataset_R$ asignado incluye más de 5 regresores, seleccione de manera justificada los 5 que considere más relevantes. Una vez obtenidos los modelos, elegir el que considere más adecuado para su conjunto de datos según las medidas de calidad conocidas.
+\end{framed}
+
+Para abordar esta tarea, ya que contamos con más de 5 regresores, tomaremos como base las conclusiones extraídas del análisis exploratorio de los datos, donde se ha observado que las variables de mayor influencia en la predicción del atributo $Mean\_temperature$ son: $Max\_temperature$, $Min\_temperature$, $Dewpoint$, $Sea\_level\_pressure$ y $Visibility$, tal y como se muestra en la Figura \ref{fig:fig5}.
+
+Una vez elegidas las variables a emplear, estudiemos los resultados obtenidos para cada modelo (Figura \ref{fig:fig20}). Para compararlos, tendremos en cuenta los siguientes valores, resumidos en la Tabla \ref{tab:tab14}:
+
+* *Multiple R-squared* o $R^2$, que nos muestra en qué proporción la variación de $X$ explica la variación de $Y$, por lo que cuanto mayor sea, mejor.
+* *Adjusted R-squared*, similar al anterior, excepto porque en este caso el valor de $R^2$ está escalado teniendo en cuenta número de variables del modelo. En este caso la diferencia no será significativa con respecto a $R^2$, ya que solamente tenemos una variable.
+
+Así pues, comparando los modelos obtenidos observamos que **el modelo que mejor se ajusta a los datos reales es el *Modelo 1*, el cual toma como $X$ el atributo *Max_temperature*** ($R^2 = 94.56\%$).
+
+```{r include=FALSE, echo=FALSE}
+
+# Modelos
+
+model_1 <- lm(Mean_temperature ~ Max_temperature, data=wankara)
+summary(model_1)
+
+model_2 <- lm(Mean_temperature ~ Min_temperature, data=wankara)
+summary(model_2)
+
+model_3 <- lm(Mean_temperature ~ Dewpoint, data=wankara)
+summary(model_3)
+
+model_4 <- lm(Mean_temperature ~ Sea_level_pressure, data=wankara)
+summary(model_4)
+
+model_5 <- lm(Mean_temperature ~ Visibility, data=wankara)
+summary(model_5)
+
+```
+
+```{r tab14, include=TRUE, echo=FALSE}
+
+# Resumen de los modelos
+
+s1 <- summary(model_1)
+s2 <- summary(model_2)
+s3 <- summary(model_3)
+s4 <- summary(model_4)
+s5 <- summary(model_5)
+
+summaries <- list(s1,s2,s3,s4,s5)
+
+# Extraemos R-squared y Adj. R-squared para cada modelo
+
+r_squareds <- unlist(lapply(summaries, function(x) x$r.squared))
+adj_r_squareds <- unlist(lapply(summaries, function(x) x$adj.r.squared))
+
+results <- data.frame(
+  row.names = c('Model 1: Max_temperature', 
+                'Model 2: Min_temperature', 
+                'Model 3: Dewpoint', 
+                'Model 4: Sea_level_pressure', 
+                'Model 5: Visibility'),
+  'R-squared'=r_squareds, 
+  'Adj R-squared'=adj_r_squareds)
+
+kbl(results, booktabs = T, caption='Resultados de cada modelo de regresión') %>%
+  kable_styling(latex_options = 'striped', font_size=10)
+
+```
+
+```{r fig20, include=TRUE, echo=FALSE, fig.dim=c(6,4), fig.cap="Representación de los modelos de regresión lineal"}
+
+p1 <- wankara %>% ggplot(aes(x=Max_temperature, y=Mean_temperature)) + geom_point(color='orange') +
+  geom_abline(color='blue', slope = coef(model_1)[[2]], intercept = coef(model_1)[[1]]) + theme_minimal()
+
+p2 <- wankara %>% ggplot(aes(x=Min_temperature, y=Mean_temperature)) + geom_point(color='orange') +
+  geom_abline(color='blue', slope = coef(model_2)[[2]], intercept = coef(model_2)[[1]]) + theme_minimal()
+
+p3 <- wankara %>% ggplot(aes(x=Dewpoint, y=Mean_temperature)) + geom_point(color='orange') +
+  geom_abline(color='blue', slope = coef(model_3)[[2]], intercept = coef(model_3)[[1]]) + theme_minimal()
+
+p4 <- wankara %>% ggplot(aes(x=Sea_level_pressure, y=Mean_temperature)) + geom_point(color='orange') +
+  geom_abline(color='blue', slope = coef(model_4)[[2]], intercept = coef(model_4)[[1]]) + theme_minimal()
+
+p5 <- wankara %>% ggplot(aes(x=Visibility, y=Mean_temperature)) + geom_point(color='orange') +
+  geom_abline(color='blue', slope = coef(model_5)[[2]], intercept = coef(model_5)[[1]]) + theme_minimal()
+
+grid.arrange(p1, p2, p3, p4, p5, ncol=3, nrow=2)
+
+```
+
+## Regresión lineal múltiple
+
+\begin{framed}
+Utilizar el algoritmo para regresión lineal múltiple. Justificar adecuadamente si el modelo obtenido aporta mejoras respecto al modelo elegido en el paso anterior (en este apartado tenga  también  en  cuenta la consideración de posibles interacciones y no linealidad). 
+\end{framed}
+
+Vamos a seguir un enfoque descendente (*stepwise backward*) para tratar de obtener un modelo de regresión múltiple que mejore los resultados del modelo de regresión simple previamente elegido. Veamos, paso por paso, el procedimiento llevado a cabo:
+
+1. Partimos de un modelo con todas las variables del dataset, del cual observamos un excelente valor para $R^2$ y Adj. $R^2$. Podemos ver que con un $98.98\%$ de $R^2$ se describe casi a la perfección el comportamiento de la variable $Mean\_temperature$.
+
+```{r results='hide'}
+m1 <- lm(Mean_temperature ~ ., data=wankara)
+summary(m1)
+```
+
+2. Aunque ya hemos obtenido un modelo considerablemente mejor que el de regresión lineal simple, tratemos de mejorarlo si es posible. Para ello, vamos a eliminar del conjunto de predictores la variable $Precipitation$, la cual, como ya adelantamos en la sección dedicada al análisis exploratorio de los datos, apenas era relevante. También podemos observar su baja relevancia si observamos el valor de $Pr(>|t|)$, el cuál nos indica que la variable es poco significativa.
+
+```{r results='hide'}
+m2 <- lm(Mean_temperature ~ .-Precipitation, data=wankara)
+summary(m2)
+```
+
+  Así pues, tras eliminar $Precipitation$ del conjunto de predictores obtenemos un nuevo modelo en el que apenas se producen variaciones ($R^2 = 98.98\%$), más allá de una mejora de un $0.01\%$ en el valor del error residual estándar ($Residual\ standard\ error$).
+
+3. Tras observar que ahora todas las variables que forman parte del modelo son significativas, una observación de especial relevancia descubierta durante el análisis exploratorio de los datos (ver Sección \ref{hip}) es que la distribución de la visibilidad con respecto a la temperatura media podría corresponderse con una función cuadrática. Tratemos pues de añadir no-linearidad al modelo elevando al cuadrado la variable $Visibility$.
+
+```{r results='hide'}
+m3 <- lm(Mean_temperature~.-Precipitation+I(Visibility^2), data=wankara)
+summary(m3)
+```
+
+  Como podemos observar, los resultados mejoran aun más: hemos pasado de un $Adj.R^2 = 98.98\%$ a un $Adj.R^2=98.99\%$, lo que supone una mejora de un $0.01\%$ y un modelo resultante casi perfecto.
+
+4. Partiendo de un modelo tan bueno como base, tratemos de simplificarlo a costa de reducir levemente su precisión. Partiendo primero de las variables menos correlacionadas con $Mean\_temperature$, eliminaremos inicialmente la variable $Wind\_speed$, obteniendo un $98.95\%$ de $R^2$.
+
+```{r results='hide'}
+
+m4 <- lm(Mean_temperature ~ .-Precipitation-Wind_speed+I(Visibility^2), 
+         data=wankara)
+summary(m4)
+
+```
+
+5. Observamos ahora que la variable $Max\_wind\_speed$ deja de ser significativa, lo que nos lleva a descartarla, manteniendo un $R^2$ del $98,95\%$. Nos mantenemos aproximadamente en un $98\%$ de $R^2$ tras haber quitado dos variables, lo cual es bueno porque nuestro modelo se ha simplificado a costa de perder muy poca precisión.
+
+```{r results='hide'}
+
+m5 <- lm(Mean_temperature ~ .-
+           Precipitation-Wind_speed-Max_wind_speed+I(Visibility^2), 
+         data=wankara)
+summary(m5)
+
+```
+
+6. Siguiendo el orden de variables menos correlacionadas con la variable a predecir, eliminemos $Standard\_pressure$ de la lista de candidatas. De nuevo, nos mantenemos alrededor del $98\%$ ($98.92\%$) de $R^2$ con un modelo mucho más simple.
+
+```{r results='hide'}
+
+m6 <- lm(Mean_temperature ~ .-
+           Precipitation-Wind_speed-
+           Max_wind_speed-Standard_pressure+I(Visibility^2), 
+         data=wankara)
+summary(m6)
+
+```
+
+Si siguiésemos el proceso de eliminación de variables, realmente podríamos observar que con sólo la temperatura mínima ($Min\_temperature$) y la temperatura máxima ($Max\_temperature$) la temperatura media ($Mean\_temperature$) se predice muy bien, obteniendo un $98.7\%$ de $R^2$.
+
+```{r results='hide'}
+
+m7 <- lm(Mean_temperature~Max_temperature+Min_temperature, data=wankara)
+summary(m7)
+
+```
+
+También observamos que añadiendo interacción entre ambas variables los resultados no varían ($98.7\%$ de $R^2$):
+
+```{r results='hide'}
+
+m8 <- lm(Mean_temperature~Max_temperature*Min_temperature, data=wankara)
+summary(m8)
+
+```
+
+No obstante, finalmente **nos quedaremos con el modelo obtenido en la iteración 6**, ya que es el único que no desciende del $98.9\%$ de $R^2$, lo cual lo convierte un modelo casi perfecto y bastante simple. También debemos tener en cuenta que obtener la temperatura media empleando únicamente las variables $Max\_temperature$ y $Min\_temperature$ es algo que cualquier persona podría conseguir aplicando la media y obteniendo un error aproximadamente similar al del modelo. Sin embargo, es cuando otras variables entran en juego (visibilidad, presión, etc.) cuando de verdad el modelo cobra valor, de ahí que se haya decidido por no eliminar todas estas variables y detener aquí el proceso.
+
+```{r echo=FALSE, include=FALSE}
+
+best_lm <- m6
+best_lm
+
+```
+
+
+## Regresión mediante *k-NN*
+
+\begin{framed}
+Aplicar el algoritmo k-NN para regresión no paramétrica.
+\end{framed}
+
+En este apartado aplicaremos el algoritmo de *k-NN* para regresión utlizando las particiones 5-fcv proporcionadas. Tras esto, comprobaremos si los resultados mejoran con las mismas particiones en comparación con el mejor modelo de regresión lineal múltiple obtenido en el apartado anterior.
+
+Concretamente, vamos a evaluar *k-NN* de tres formas diferentes:
+
+* Utilizando todas las variables del dataset.
+* Empleando las variables del mejor modelo obtenido para regresión lineal múltiple.
+* Utilizando únicamente las variables $Max\_temperature$ y $Min\_temperature$.
+
+```{r include=FALSE, echo=FALSE}
+
+dataset = 'wankara'
+
+run_knn_fold <- function(i, dataset, tt = 'test', form = Y ~ .) {
+  # cargar i-esimo fold de train
+  file <- paste('./data/wankara/', dataset, '-5-', i, 'tra.dat', sep = '')
+  x_tra <- read.csv(file, comment.char = '@', header = FALSE)
+  
+  # cargar i-esimo fold de test
+  file <- paste('./data/wankara/', dataset, '-5-', i, 'tst.dat', sep = '')
+  x_tst <- read.csv(file, comment.char = '@', header = FALSE)
+  
+  In <- length(names(x_tra)) - 1
+  names(x_tra)[1:In] <- paste ('X', 1:In, sep = '')
+  names(x_tra)[In + 1] <- 'Y'
+  names(x_tst)[1:In] <- paste ('X', 1:In, sep = '')
+  names(x_tst)[In + 1] <- 'Y'
+  
+  if (tt == 'train') {
+    test <- x_tra
+  } else {
+    test <- x_tst
+  }
+  
+  # Regresion
+  fitMulti = kknn(form, x_tra, test)
+  yprime = fitMulti$fitted.values
+  
+  # MSE
+  sum(abs(test$Y - yprime) ^ 2) / length(yprime)
+}
+
+# con todas las variables:
+knnMSEtrain_all <- mean(sapply(1:5, run_knn_fold, dataset, 'train'))
+knnMSEtest_all <- mean(sapply(1:5, run_knn_fold, dataset, 'test'))
+
+# con las variables del mejor modelo de lm:
+knnMSEtrain_best <-
+  mean(sapply(1:5, run_knn_fold, dataset, 'train', 
+              Y ~ . - X4 - X6 - X8 - X9 + I(X7 ^ 2)))
+knnMSEtest_best <-
+  mean(sapply(1:5, run_knn_fold, dataset, 'test', 
+              Y ~ . - X4 - X6 - X8 - X9 + I(X7 ^ 2)))
+
+# con las variables Max_temperature y Min_temperature:
+knnMSEtrain_maxmin <-
+  mean(sapply(1:5, run_knn_fold, dataset, 'train', Y ~ X1 + X2))
+knnMSEtest_maxmin <-
+  mean(sapply(1:5, run_knn_fold, dataset, 'test', Y ~ X1 + X2))
+
+```
+
+
+```{r include=FALSE, echo=FALSE}
+
+dataset = 'wankara'
+
+run_lm_fold <- function(i, dataset, tt = 'test', form = Y ~ .) {
+  # cargar i-esimo fold de train
+  file <- paste('./data/wankara/', dataset, '-5-', i, 'tra.dat', sep = '')
+  x_tra <- read.csv(file, comment.char = '@', header = FALSE)
+  
+  # cargar i-esimo fold de test
+  file <- paste('./data/wankara/', dataset, '-5-', i, 'tst.dat', sep = '')
+  x_tst <- read.csv(file, comment.char = '@', header = FALSE)
+  
+  In <- length(names(x_tra)) - 1
+  names(x_tra)[1:In] <- paste ('X', 1:In, sep = '')
+  names(x_tra)[In + 1] <- 'Y'
+  names(x_tst)[1:In] <- paste ('X', 1:In, sep = '')
+  names(x_tst)[In + 1] <- 'Y'
+  
+  if (tt == 'train') {
+    test <- x_tra
+  } else {
+    test <- x_tst
+  }
+  
+  # Regresion
+  fitMulti = lm(form, x_tra)
+  yprime = predict(fitMulti, test)
+  
+  # MSE
+  sum(abs(test$Y - yprime) ^ 2) / length(yprime)
+}
+
+# con las variables del mejor modelo de lm:
+lmMSEtrain <-
+  mean(sapply(1:5, run_lm_fold, dataset, 'train', 
+              Y ~ . - X4 - X6 - X8 - X9 + I(X7 ^ 2)))
+lmMSEtest <-
+  mean(sapply(1:5, run_lm_fold, dataset, 'test', 
+              Y ~ . - X4 - X6 - X8 - X9 + I(X7 ^ 2)))
+
+```
+
+```{r tab15, include=TRUE, echo=FALSE}
+
+results_mse <-
+  data.frame(
+    'MSE train' = c(
+      knnMSEtrain_all,
+      knnMSEtrain_best,
+      knnMSEtrain_maxmin,
+      lmMSEtrain
+    ),
+    'MSE test' = c(knnMSEtest_all,
+                   knnMSEtest_best,
+                   knnMSEtest_maxmin,
+                   lmMSEtest),
+    row.names = c(
+      'k-NN: todas las variables',
+      'k-NN: mejores variables lm',
+      'k-NN: max y min temp.',
+      'lm: mejores variables'
+    )
+  )
+
+kbl(results_mse, booktabs = T, caption =
+      'MSE para k-NN y regresión lineal múltiple sobre train y test (5-fcv)') %>%
+  kable_styling(latex_options = 'striped', font_size = 10)
+
+```
+
+De los resultados resumidos en la Tabla \ref{tab:tab15} observamos que el modelo con menor error cuadrático medio ($MSE$) sobre los datos de *test* es el modelo de regresión lineal que emplea el conjunto de variables seleccionado en el apartado anterior. Por otro lado, si estudiamos los resultados de *k-NN* observamos que *k-NN* con las mejores variables tiene un mejor rendimiento con los datos de *train* pero no generaliza bien para los datos de *test*. También podemos ver que el *k-NN* con mejores resultados para los datos de *test* es el que trabaja únicamente con las variables $Max\_temperature$ y $Min\_temperature$. Finalmente, *k-NN* utilizando todas las variables es el caso en el que peor rendimiento obtenemos tanto para *train* como para *test*.
+
+## Comparativa
+
+\begin{framed}
+Comparar los resultados de los dos algoritmos de regresión múltiple entre sí, y adicionalmente mediante comparativas múltiples con un tercero (el modelo de regresión M5', cuyos resultados ya están incluidos en las tablas de resultados disponibles). 
+\end{framed}
+
+Primero compararemos regresión lineal múltiple (*LM*) con *k-NN* aplicando el test de Wilcoxon. Los resultados están reflejados en la Tabla \ref{tab:tab16}.
+
+* De la tabla podemos observar que **no hay diferencias significativas entre ambos modelos** (sólo hay un $(1-0.7660)*100 = 23.4\%$ de confianza en que sean distintos).
+
+```{r include=FALSE, echo=FALSE}
+
+# k-NN sobre train y test utilizando 5-fcv y todas las variables
+knnMSEtrain <- mean(sapply(1:5, run_knn_fold, dataset, 'train'))
+knnMSEtest <- mean(sapply(1:5, run_knn_fold, dataset, 'test'))
+
+# lm sobre train y test utilizando 5-fcv y todas las variables
+lmMSEtrain <- mean(sapply(1:5, run_lm_fold, dataset, 'train'))
+lmMSEtest <- mean(sapply(1:5, run_lm_fold, dataset, 'test'))
+
+```
+  
+```{r tab16, include=TRUE, echo=FALSE}
+
+# Cargamos los datos del .csv para aplicar los tests estadisticos:
+
+## Tabla con los errores medios de test
+resultados <- read.csv("./data/results/regr_test_alumnos.csv")
+tablatst <- cbind(resultados[, 2:dim(resultados)[2]])
+colnames(tablatst) <- names(resultados)[2:dim(resultados)[2]]
+rownames(tablatst) <- resultados[, 1]
+
+## Tabla con los errores medios de entrenamiento
+resultados <- read.csv('./data/results/regr_train_alumnos.csv')
+tablatra <- cbind(resultados[, 2:dim(resultados)[2]])
+colnames(tablatra) <- names(resultados)[2:dim(resultados)[2]]
+rownames(tablatra) <- resultados[, 1]
+
+## Se aplica comparativa por pares para LM y k-NN mediante Wilcoxon:
+difs <- (tablatst[, 1] - tablatst[, 2]) / tablatst[, 1]
+wilc_1_2 <-
+  cbind(ifelse (difs < 0, abs(difs) + 0.1, 0 + 0.1),
+        ifelse (difs > 0, abs(difs) + 0.1, 0 + 0.1))
+colnames(wilc_1_2) <-
+  c(colnames(tablatst)[1], colnames(tablatst)[2])
+# head(wilc_1_2)
+
+LMvsKNNtst <-
+  wilcox.test(wilc_1_2[, 1],
+              wilc_1_2[, 2],
+              alternative = "two.sided",
+              paired = TRUE)
+Rmas <- LMvsKNNtst$statistic
+pvalue <- LMvsKNNtst$p.value
+LMvsKNNtst <-
+  wilcox.test(wilc_1_2[, 2],
+              wilc_1_2[, 1],
+              alternative = "two.sided",
+              paired = TRUE)
+Rmenos <- LMvsKNNtst$statistic
+
+lm_vs_knn <- cbind('R+' = Rmas,
+                   'R-' = Rmenos,
+                   'p-value' = pvalue)
+rownames(lm_vs_knn) <- 'LM vs. k-NN'
+
+kbl(lm_vs_knn, booktabs = T, caption =
+      'Comparativa entre LM (R+) y k-NN (R-) aplicando el test de Wilcoxon') %>%
+  kable_styling(latex_options = 'striped', font_size = 10)
+
+# No existen diferencias significativas entre ambos
+# (23.4% de confianza de que sean distintos)
+
+```
+
+Ahora compararemos *LM*, *k-NN* y *M5\'* aplicando Friedman y Holm como post-hoc (Tabla \ref{tab:tab17}).
+
+* Tras aplicar el test de Friedman ($\tilde{\chi}^2 = 8.4444$, $p = 0.01467$) observamos que al menos uno de los métodos de regresión difiere del resto (rechazamos $H_0$), por lo que aplicamos Holm como post-hoc.
+* El post-hoc nos muestra que existen diferencias significativas a favor de M5' ($M5\ vs\ LM = 0.081$ y $M5\ vs\ KNN = 0.108$, con aproximadamente un $90\%$ de confianza), mientras que los otros se pueden considerar equivalentes.
+
+```{r tab17, include=TRUE, echo=FALSE}
+
+## Podemos aplicar comparativas multiples utilizando Friedman y Holm como post-hoc:
+
+# comprobamos si hay diferencias significativas entre al menos un par de algoritmos
+test_friedman <- friedman.test(as.matrix(tablatst))
+# test_friedman
+# las hay: p-value < 0.05
+
+# comparamos todos con todos
+tam <- dim(tablatst)
+groups <- rep(1:tam[2], each = tam[1])
+pw <- pairwise.wilcox.test(as.matrix(tablatst),
+                           groups,
+                           p.adjust = "holm",
+                           paired = TRUE)
+
+# pw
+
+# Existen diferencias significativas a favor de M5' (3vs1 0.0805 y 3vs2 0.1077, con aprox.
+# 90% de confianza, alpha=0.1) mientras que los otros dos pueden ser considerados equivalentes
+
+lm_vs_knn_vs_m5 <- pw$p.value
+rownames(lm_vs_knn_vs_m5) <- c('k-NN', 'M5\'')
+colnames(lm_vs_knn_vs_m5) <- c('LM', 'k-NN')
+
+kbl(lm_vs_knn_vs_m5, booktabs = T, caption =
+      'Comparativa entre LM, k-NN y M5\' aplicando Holm') %>%
+  kable_styling(latex_options = 'striped', font_size = 10)
+
+```
+
+# Clasificación {#clas}
+
+Esta última sección estará dedicada a las tareas de clasificación propuestas sobre el dataset *newthyroid*. Toda la información relativa al estudio de las variables a emplear, así como de las clases a identificar se encuentra detallada en la Sección \ref{eda}, dedicada al análisis exploratorio de los datos.
+
+Veamos pues, paso por paso, la resolución de los diferentes problemas planteados.
+
+## Clasificación mediante *k-NN*
+
+\begin{framed}
+Utilizar el algoritmo k-NN probando con diferentes valores de k. Elegir el que considere más adecuado para su conjunto de datos. Analice qué ocurre en los valores de precisión en training y test con los diferentes valores de k.
+\end{framed}
+
+Para abordar esta tarea, se ha aplicado *k-NN* con todas las variables y comparado los resultados obtenidos sobre el conjunto de datos 10-fcv proporcionado empleando diferentes valores de *k*, concretamente: 1, 3, 5 y 7. Los resultados se muestran en la Tabla \ref{tab:tab18} y en la Figura \ref{fig:fig22}, donde podemos observar que los niveles de *accuracy* para *train* y *test* disminuyen a medida que aumentamos el valor de *k*. Por tanto, el mejor valor de *k* para este caso es $k=1$ ($Accuracy_{train} = 1; Accuracy_{test} = 0.96$).
+
+```{r tab18, include=TRUE, echo=FALSE}
+
+dataset = 'newthyroid'
+
+do_knn_fold <- function(i, dataset, tt = 'test', k_value = 1) {
+  # cargar i-esimo fold de train
+  file <- paste('./data/newthyroid/', dataset, '-10-', i, 'tra.dat', sep = '')
+  fold_train <- read.csv(file, comment.char = '@', header = FALSE)
+  
+  # cargar i-esimo fold de test
+  file <- paste('./data/newthyroid/', dataset, '-10-', i, 'tst.dat', sep = '')
+  fold_test <- read.csv(file, comment.char = '@', header = FALSE)
+  
+  len <- length(names(fold_train))
+  
+  # train
+  X_train = fold_train[, 1:len - 1]
+  y_train = fold_train[, len]
+  
+  # test
+  if (tt == 'train') {
+    X_test <- X_train
+    y_test <- y_train
+  } else if (tt == 'test') {
+    X_test <- fold_test[, 1:len - 1]
+    y_test <- fold_test[, len]
+  }
+  
+  y_train <- as.factor(y_train)
+  y_test <- as.factor(y_test)
+  
+  # entrenamiento
+  clf <- train(
+    x = X_train,
+    y = y_train,
+    method = 'knn',
+    metric = 'Accuracy',
+    preProc = c('center', 'scale'),
+    tuneGrid = expand.grid(k=k_value)
+  )
+  
+  # prediccion
+  y_pred = predict(clf, newdata = X_test)
+  
+  # accuracy
+  mean(y_test == y_pred)
+}
+
+knn_train_acc_k1 <-
+  mean(sapply(1:10, do_knn_fold, dataset, 'train', k_value = 1))
+knn_test_acc_k1 <-
+  mean(sapply(1:10, do_knn_fold, dataset, 'test', k_value = 1))
+
+knn_train_acc_k3 <-
+  mean(sapply(1:10, do_knn_fold, dataset, 'train', k_value = 3))
+knn_test_acc_k3 <-
+  mean(sapply(1:10, do_knn_fold, dataset, 'test', k_value = 3))
+
+knn_train_acc_k5 <-
+  mean(sapply(1:10, do_knn_fold, dataset, 'train', k_value = 5))
+knn_test_acc_k5 <-
+  mean(sapply(1:10, do_knn_fold, dataset, 'test', k_value = 5))
+
+knn_train_acc_k7 <-
+  mean(sapply(1:10, do_knn_fold, dataset, 'train', k_value = 7))
+knn_test_acc_k7 <-
+  mean(sapply(1:10, do_knn_fold, dataset, 'test', k_value = 7))
+
+results_knn <-
+  rbind(
+    'KNN (K=1)' = c(knn_train_acc_k1, knn_test_acc_k1),
+    'KNN (K=3)' = c(knn_train_acc_k3, knn_test_acc_k3),
+    'KNN (K=5)' = c(knn_train_acc_k5, knn_test_acc_k5),
+    'KNN (K=7)' = c(knn_train_acc_k7, knn_test_acc_k7)
+  )
+
+colnames(results_knn) <- c('Acc. CV train', 'Acc. CV test')
+
+kbl(results_knn, booktabs = T, caption =
+      'Resultados obtenidos tras aplicar k-NN con 10-fcv') %>%
+  kable_styling(latex_options = 'striped', font_size = 10)
+
+```
+
+```{r fig22, include=TRUE, echo=FALSE, fig.dim=c(7,4), fig.cap="accuracy de k-NN en train y test para diferentes valores de k"}
+
+df <- as.data.frame(results_knn)
+df['rowname'] <- rownames(df)
+
+df %>% melt(id.vars = 'rowname',
+            value.name = 'value',
+            variable.name = 'case') %>%
+  ggplot(aes(x = rowname, y = value)) +
+  geom_bar(aes(fill = case), stat = 'identity', position = 'dodge') + theme_bw() +
+  labs(x = '', y = 'Accuracy') +
+  geom_text(
+    aes(group = case, label = round(value, 3)),
+    vjust = 1.5,
+    color = 'white',
+    size = 4,
+    position = position_dodge(width = 1)
+  ) + scale_fill_discrete(name = '', labels = c('Train 10-fcv', 'Test 10-fcv'))
+
+```
+
+## Clasificación mediante *LDA*
+
+\begin{framed}
+Utilizar el algoritmo LDA para clasificar. No olvide comprobar las asunciones.
+\end{framed}
+
+Abordemos el mismo problema de clasificación empleando LDA. Antes de poderlo aplicar, es necesario tener en cuenta los siguientes requisitos:
+
+1. **Las observaciones provienen de una muestra aleatoria**: asumiremos que es así.
+
+2. **Todo predictor tiene una distribución normal**: como pudimos ver en la Sección \ref{eda-norm}, no podemos asumir la normalidad de ninguno de los predictores de nuestro dataset (ni siquiera tras aplicar transformaciones como *Box-Cox* y *Yeo-Johnson*). Esto puede empeorar de forma notable los resultados obtenidos; no obstante, trataremos de aplicar LDA pasando por alto este requisito, aunque siendo conscientes de que no conseguiremos un clasificador óptimo[^footnote7].
+
+[^footnote7]: La condición de normalidad supone una pérdida de precisión al aplicar LDA pero no hace inviable este método de clasificación. Véase: Li, Tao & Zhu, Shenghuo & Ogihara, Mitsunori. (2006). Using discriminant analysis for multi-class classification: An experimental investigation. Knowledge and Information Systems. 10. 453-472. 10.1007/s10115-006-0013-y. 
+
+3. **Todas las clases comparten la misma matriz de covarianza (la matriz de covarianzas es homogénea en todos los grupos)**: de los resultados expresados en las Tablas \ref{tab:tab19} y \ref{tab:tab20}, observamos que, tras aplicar el Test de Levene, no podemos asumir la homegeneidad de las varianzas. De nuevo, aplicaremos LDA a pesar de que no se cumpla esta asunción, a costa de obtener peores resultados.
+
+```{r tab19, include=TRUE, echo=FALSE}
+
+nums <- sapply(newthyroid, is.numeric)
+
+normal <- newthyroid %>% filter(Class == 'Normal')
+hipert <- newthyroid %>% filter(Class == 'Hipertiroidico')
+hipoti <- newthyroid %>% filter(Class == 'Hipotiroidico')
+
+vars_normal <- sapply(normal[,nums], var)
+vars_hipert <- sapply(hipert[,nums], var)
+vars_hipoti <- sapply(hipoti[,nums], var)
+
+covariance <- data.frame(vars_normal, vars_hipert, vars_hipoti)
+colnames(covariance) <- c('Normal', 'Hipertorioidico', 'Hipotiroidico')
+
+kbl(covariance, booktabs = T, caption =
+      'Varianzas por variable y clase') %>%
+  kable_styling(latex_options = 'striped', font_size = 10)
+
+```
+
+```{r tab20, include=TRUE, echo=FALSE}
+
+l1 <- leveneTest(T3resin ~ Class, newthyroid)
+l2 <- leveneTest(Thyroxin ~ Class, newthyroid)
+l3 <- leveneTest(Triiodothyronine ~ Class, newthyroid)
+l4 <- leveneTest(Thyroidstimulating ~ Class, newthyroid)
+l5 <- leveneTest(TSH_value ~ Class, newthyroid)
+
+levene_results <-
+  data.frame(cbind(
+    'Variable' = c(
+      'T3resin',
+      'Thyroxin',
+      'Triiodothyronine',
+      'Thyroidstimulating',
+      'TSH_value'
+    ),
+    'p-value' = c(
+      l1$`Pr(>F)`[1],
+      l2$`Pr(>F)`[1],
+      l3$`Pr(>F)`[1],
+      l4$`Pr(>F)`[1],
+      l5$`Pr(>F)`[1]
+    )
+  ))
+
+# p-value bajo -> diferencias significativas entre varianzas
+
+kbl(levene_results, booktabs = T, caption =
+      'Resultados tras aplicar el Test de Levene') %>%
+  kable_styling(latex_options = 'striped', font_size = 10)
+
+```
+
+Antes de aplicar LDA, también se puede considerar como precondición que los predictores empleados sean independientes y que contemos con más observaciones que predictores. También es aconsejable que los predictores estén centrados y escalados, eliminando aquellos con varianza cercana a 0.
+
+* Con respecto a la independencia de los predictores, probaremos a aplicar LDA considerando tanto todas las variables como tan sólo un subconjunto de ellas con una baja correlación entre sí. De esta forma, podremos estudiar cómo afecta la independencia de las variables a los resultados obtenidos.
+* Contamos con muchas más observaciones (215) que predictores (6).
+* El escalado y la centralidad de los predictores ya se tuvo en cuenta al abordar el análisis exploratorio de los datos (ver Sección \ref{eda}). Se aplicará dicho preprocesamiento antes de utilizar el modelo sobre los 10-fcv.
+* La varianza de ninguno de los predictores es cercana a 0, tal y como se muestra en la Tabla \ref{tab:tab21}.
+
+```{r tab21, include=TRUE, echo=FALSE}
+
+# varianza de los predictores
+varianza <- sapply(newthyroid[,nums], var)
+
+kbl(as.data.frame(varianza), booktabs = T, caption =
+      'Varianzas de los predictores') %>%
+  kable_styling(latex_options = 'striped', font_size = 10)
+
+```
+
+
+```{r include=FALSE, echo=FALSE}
+
+dataset = 'newthyroid'
+
+cv_classify <- function(i, dataset, tt = 'test', method, variables) {
+  # cargar i-esimo fold de train
+  file <- paste('./data/newthyroid/', dataset, '-10-', i, 'tra.dat', sep = '')
+  fold_train <- read.csv(file, comment.char = '@', header = FALSE)
+  
+  # cargar i-esimo fold de test
+  file <- paste('./data/newthyroid/', dataset, '-10-', i, 'tst.dat', sep = '')
+  fold_test <- read.csv(file, comment.char = '@', header = FALSE)
+  
+  len <- length(names(fold_train))
+  
+  # train
+  X_train = fold_train[, variables]
+  y_train = fold_train[, len]
+  
+  # test
+  if (tt == 'train') {
+    X_test <- X_train
+    y_test <- y_train
+  } else if (tt == 'test') {
+    X_test <- fold_test[, variables]
+    y_test <- fold_test[, len]
+  }
+
+  y_train <- as.factor(y_train)
+  y_test <- as.factor(y_test)
+  
+  # entrenamiento
+  model <- train(X_train, 
+               y_train, 
+               method=method, 
+               preProcess = c('center', 'scale'))
+  
+  # prediccion
+  y_pred = predict(model, newdata = X_test)
+  
+  # accuracy
+  mean(y_test == y_pred)
+}
+
+# utilizando todas las variables
+lda_train_acc_all <-
+  mean(sapply(1:10, cv_classify, dataset, 'train', method='lda', variables=c(1:5)))
+lda_test_acc_all <-
+  mean(sapply(1:10, cv_classify, dataset, 'test', method='lda', variables=c(1:5)))
+
+# utilizando un subconjunto de variables
+# se elimina la variable Thyroidstimulating, muy relacionada con TSH_value
+lda_train_acc_selected <- 
+  mean(sapply(1:10, cv_classify, dataset, 'train', method='lda', variables=c(1,2,3,5)))
+lda_test_acc_selected <-
+  mean(sapply(1:10, cv_classify, dataset, 'test', method='lda', variables=c(1,2,3,5)))
+
+```
+
+
+```{r tab22, include=TRUE, echo=FALSE}
+
+results_lda <-
+  rbind(
+    'LDA: todas las variables' = c(lda_train_acc_all, lda_test_acc_all),
+    'LDA: variables seleccionadas' = c(lda_train_acc_selected, lda_test_acc_selected)
+  )
+
+colnames(results_lda) <- c('Acc. CV train', 'Acc. CV test')
+
+kbl(results_lda, booktabs = T, caption =
+      'Resultados obtenidos tras aplicar LDA con 10-fcv') %>%
+  kable_styling(latex_options = 'striped', font_size = 10)
+
+```
+
+
+```{r fig23, include=TRUE, echo=FALSE, fig.dim=c(7,4), fig.cap="accuracy de LDA en train y test"}
+
+df <- as.data.frame(results_lda)
+df['rowname'] <- rownames(df)
+
+df %>% melt(id.vars = 'rowname',
+            value.name = 'value',
+            variable.name = 'case') %>%
+  ggplot(aes(x = rowname, y = value)) +
+  geom_bar(aes(fill = case), stat = 'identity', position = 'dodge') + theme_bw() +
+  labs(x = '', y = 'Accuracy') +
+  geom_text(
+    aes(group = case, label = round(value, 3)),
+    vjust = 1.5,
+    color = 'white',
+    size = 4,
+    position = position_dodge(width = 1)
+  ) + scale_fill_discrete(name = '', labels = c('Train 10-fcv', 'Test 10-fcv'))
+
+```
+
+Estudiados los prerrequisitos, apliquemos LDA. De los resultados resumidos en la Tabla \ref{tab:tab22} y la Figura \ref{fig:fig23} podemos observar que el valor de accuracy obtenido es superior tanto para *train* como para *test* en el caso en el que eliminamos del conjunto de predictores aquellas variables que dan lugar a correlaciones indeseadas (en este caso, la variable $Thyroidstimulating$, muy relacionada con $TSH\_value$, como ya vimos en la sección \ref{cor-newthyroid}). De esta forma, logramos mejorar ligeramente el modelo.
+
+## Clasificación mediante *QDA*
+
+\begin{framed}
+Utilizar el algoritmo QDA para clasificar. No olvide comprobar las asunciones.
+\end{framed}
+
+Abordemos ahora el mismo problema utilizando QDA. Se trata de un tipo de clasificador que funciona mejor que LDA cuando las varianzas entre las diferentes clases son significativamente diferentes, como es el caso (véase la Tabla \ref{tab:tab19}), por lo que a priori podemos esperar mejores resultados. Recordemos las asunciones previas a aplicar QDA:
+
+* **El número de predictores es menor que el número de observaciones para cada clase**: esta condición se cumple.
+* **Los predictores de cada clase deben ser independientes**. Al igual que en el caso anterior, probaremos el algoritmo con todos los predictores y con un subconjunto de variables linealmente independientes para comparar la mejora.
+
+
+```{r tab23, include=TRUE, echo=FALSE}
+
+# utilizando todas las variables
+qda_train_acc_all <-
+  mean(sapply(1:10, cv_classify, dataset, 'train', method='qda', variables=c(1:5)))
+qda_test_acc_all <-
+  mean(sapply(1:10, cv_classify, dataset, 'test', method='qda', variables=c(1:5)))
+
+# utilizando un subconjunto de variables
+qda_train_acc_selected <- 
+  mean(sapply(1:10, cv_classify, dataset, 'train', method='qda', variables=c(1,2,3,5)))
+qda_test_acc_selected <-
+  mean(sapply(1:10, cv_classify, dataset, 'test', method='qda', variables=c(1,2,3,5)))
+
+results_qda <-
+  rbind(
+    'QDA: todas las variables' = c(qda_train_acc_all, qda_test_acc_all),
+    'QDA: variables seleccionadas' = c(qda_train_acc_selected, qda_test_acc_selected)
+  )
+
+colnames(results_qda) <- c('Acc. CV train', 'Acc. CV test')
+
+kbl(results_qda, booktabs = T, caption =
+      'Resultados obtenidos tras aplicar QDA con 10-fcv') %>%
+  kable_styling(latex_options = 'striped', font_size = 10)
+
+```
+
+
+```{r fig24, include=TRUE, echo=FALSE, fig.dim=c(7,4), fig.cap="accuracy de QDA en train y test"}
+
+df <- as.data.frame(results_qda)
+df['rowname'] <- rownames(df)
+
+df %>% melt(id.vars = 'rowname',
+            value.name = 'value',
+            variable.name = 'case') %>%
+  ggplot(aes(x = rowname, y = value)) +
+  geom_bar(aes(fill = case), stat = 'identity', position = 'dodge') + theme_bw() +
+  labs(x = '', y = 'Accuracy') +
+  geom_text(
+    aes(group = case, label = round(value, 3)),
+    vjust = 1.5,
+    color = 'white',
+    size = 4,
+    position = position_dodge(width = 1)
+  ) + scale_fill_discrete(name = '', labels = c('Train 10-fcv', 'Test 10-fcv'))
+
+```
+
+
+Como podemos observar en la Tabla \ref{tab:tab23} y la Figura \ref{fig:fig24}, de nuevo el uso de un subconjunto de variables independientes mejora la precisión del modelo frente al caso en que utilizamos todas las variables. También cabe destacar que el valor de *accuracy* obtenido empleando QDA es notablemente mejor que el de LDA: si comparamos ambos métodos para el caso en el que utilizamos las mejores variables identificadas, QDA ofrece una precisión del $97.7\%$ para el conjunto de *test*, frente al $92.1\%$ obtenido por LDA. Esta mejora podría deberse a que QDA es independiente de la condición de homocedasticidad que LDA requiere y que en este caso no se cumple.
+
+## Comparativa
+
+\begin{framed}
+Comparar los resultados de los tres algoritmos.
+\end{framed}
+
+Una vez estudiados los tres algoritmos de clasificación, compararemos sus resultados. Tras aplicar el test de Friedman ($\tilde{\chi}^2 = 0.7$, $p = 0.7047$) no podemos rechazar la hipótesis nula y, por tanto, ninguno de los métodos de clasificación empleados (*k-NN*, *LDA*, *QDA*) se considera significativamente diferente del resto.
+
+Así damos por concluida esta sección, habiendo estudiado en detalle diferentes métodos de clasificación sobre el dataset *newthyroid*. Como conclusión, podemos observar que una buena elección de variables y tener en cuenta las asunciones necesarias para cada tipo de algoritmo hará que generalmente mejore el rendimiento obtenido. Por ejemplo, para *LDA* y *QDA* hemos visto cómo eliminar variables correlacionadas mejora el rendimiento de los clasificadores. Finalmente, para el caso de *k-NN* hemos evaluado su rendimiento para diferentes valores de $k$, observado su notable influencia en la precisión del modelo.
+
+
+```{r include=FALSE, echo=FALSE}
+
+results <- read_csv('./data/results/clasif_test_alumnos.csv')
+
+# Resultados similares con datos de train:
+# results <- read_csv('./data/results/clasif_train_alumnos.csv')
+
+results <- results %>% remove_rownames %>% column_to_rownames(var='X1')
+
+head(results)
+
+#### Friedman ####
+friedman <- friedman.test(as.matrix(results))
+friedman
+# con p-value > 0.05 no podemos rechazar H0
+# ningun metodo difiere significativamente del resto
+
+
+# Aunque no es necesario, podemos confirmarlo aplicando Holm como post-hoc...
+groups <- rep(1:ncol(results), each=nrow(results))
+results_holm <- pairwise.wilcox.test(as.matrix(results), groups, p.adjust = 'holm', paired = TRUE)
+results_holm
+
+comparison <- results_holm$p.value
+rownames(comparison) <- c('LDA', 'QDA')
+colnames(comparison) <- c('KNN', 'LDA')
+
+comparison
+
+```
+
